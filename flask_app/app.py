@@ -1,3 +1,5 @@
+# app.py
+
 from flask import Flask, render_template, request
 import mlflow
 import pickle
@@ -10,49 +12,39 @@ from nltk.corpus import stopwords
 import string
 import re
 import dagshub
-
 import warnings
+import numpy as np
+
+# --------------------- SETUP ---------------------
 warnings.simplefilter("ignore", UserWarning)
 warnings.filterwarnings("ignore")
 
+# ✅ Text preprocessing utilities
 def lemmatization(text):
-    """Lemmatize the text."""
     lemmatizer = WordNetLemmatizer()
-    text = text.split()
-    text = [lemmatizer.lemmatize(word) for word in text]
-    return " ".join(text)
+    return " ".join([lemmatizer.lemmatize(word) for word in text.split()])
 
 def remove_stop_words(text):
-    """Remove stop words from the text."""
     stop_words = set(stopwords.words("english"))
-    text = [word for word in str(text).split() if word not in stop_words]
-    return " ".join(text)
+    return " ".join([word for word in str(text).split() if word not in stop_words])
 
 def removing_numbers(text):
-    """Remove numbers from the text."""
-    text = ''.join([char for char in text if not char.isdigit()])
-    return text
+    return ''.join([char for char in text if not char.isdigit()])
 
 def lower_case(text):
-    """Convert text to lower case."""
-    text = text.split()
-    text = [word.lower() for word in text]
-    return " ".join(text)
+    return " ".join([word.lower() for word in text.split()])
 
 def removing_punctuations(text):
-    """Remove punctuations from the text."""
     text = re.sub('[%s]' % re.escape(string.punctuation), ' ', text)
     text = text.replace('؛', "")
     text = re.sub('\s+', ' ', text).strip()
     return text
 
 def removing_urls(text):
-    """Remove URLs from the text."""
     url_pattern = re.compile(r'https?://\S+|www\.\S+')
     return url_pattern.sub(r'', text)
 
 def remove_small_sentences(df):
-    """Remove sentences with less than 3 words."""
     for i in range(len(df)):
         if len(df.text.iloc[i].split()) < 3:
             df.text.iloc[i] = np.nan
@@ -64,9 +56,9 @@ def normalize_text(text):
     text = removing_punctuations(text)
     text = removing_urls(text)
     text = lemmatization(text)
-
     return text
 
+# --------------------- DAGSHUB + MLFLOW SETUP ---------------------
 dagshub_token = os.getenv("CAPSTONE_TEST")
 if not dagshub_token:
     raise EnvironmentError("CAPSTONE_TEST environment variable is not set")
@@ -77,20 +69,15 @@ os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
 dagshub_url = "https://dagshub.com"
 repo_owner = "ankit693"
 repo_name = "Recommendation-System"
-# Set up MLflow tracking URI
-mlflow.set_tracking_uri(f'{dagshub_url}/{repo_owner}/{repo_name}.mlflow')
-# -------------------------------------------------------------------------------------
 
+mlflow.set_tracking_uri(f"{dagshub_url}/{repo_owner}/{repo_name}.mlflow")
 
-# Initialize Flask app
+# --------------------- FLASK APP ---------------------
 app = Flask(__name__)
 
-# from prometheus_client import CollectorRegistry
-
-# Create a custom registry
+# --------------------- PROMETHEUS METRICS ---------------------
 registry = CollectorRegistry()
 
-# Define your custom metrics using this registry
 REQUEST_COUNT = Counter(
     "app_request_count", "Total number of requests to the app", ["method", "endpoint"], registry=registry
 )
@@ -101,23 +88,49 @@ PREDICTION_COUNT = Counter(
     "model_prediction_count", "Count of predictions for each class", ["prediction"], registry=registry
 )
 
-# ------------------------------------------------------------------------------------------
-# Model and vectorizer setup
+# --------------------- MODEL LOADING ---------------------
 model_name = "my_model"
-def get_latest_model_version(model_name):
-    client = mlflow.MlflowClient()
-    latest_version = client.get_latest_versions(model_name, stages=["Production"])
-    if not latest_version:
-        latest_version = client.get_latest_versions(model_name, stages=["None"])
-    return latest_version[0].version if latest_version else None
 
-model_version = get_latest_model_version(model_name)
-model_uri = f'models:/{model_name}/{model_version}'
+def get_model_uri_by_alias(model_name, alias="production"):
+    """
+    Get model URI using new MLflow alias system.
+    Fallback to 'staging' or 'latest' if alias not found.
+    """
+    client = mlflow.MlflowClient()
+    try:
+        versions = client.get_model_version_by_alias(model_name, alias)
+        if versions:
+            print(f"✅ Using model alias: {alias} → version {versions.version}")
+            return f"models:/{model_name}@{alias}"
+    except Exception as e:
+        print(f"⚠️ Alias '{alias}' not found: {e}")
+
+    # Fallback to 'staging' or latest version
+    try:
+        versions = client.get_model_version_by_alias(model_name, "staging")
+        if versions:
+            print(f"✅ Using fallback alias 'staging' → version {versions.version}")
+            return f"models:/{model_name}@staging"
+    except Exception as e:
+        print(f"⚠️ Alias 'staging' not found: {e}")
+
+    # Fallback to latest version (no alias)
+    versions = client.search_model_versions(f"name='{model_name}'")
+    if versions:
+        latest_version = max([int(v.version) for v in versions])
+        print(f"✅ Using latest model version: {latest_version}")
+        return f"models:/{model_name}/{latest_version}"
+
+    raise ValueError(f"No available versions found for model '{model_name}'")
+
+# Get model URI (by alias)
+model_uri = get_model_uri_by_alias(model_name, alias="production")
+
 print(f"Fetching model from: {model_uri}")
 model = mlflow.pyfunc.load_model(model_uri)
-vectorizer = pickle.load(open('models/vectorizer.pkl', 'rb'))
+vectorizer = pickle.load(open("models/vectorizer.pkl", "rb"))
 
-# Routes
+# --------------------- ROUTES ---------------------
 @app.route("/")
 def home():
     REQUEST_COUNT.labels(method="GET", endpoint="/").inc()
@@ -132,29 +145,23 @@ def predict():
     start_time = time.time()
 
     text = request.form["text"]
-    # Clean text
     text = normalize_text(text)
-    # Convert to features
     features = vectorizer.transform([text])
     features_df = pd.DataFrame(features.toarray(), columns=[str(i) for i in range(features.shape[1])])
 
-    # Predict
     result = model.predict(features_df)
     prediction = result[0]
 
-    # Increment prediction count metric
     PREDICTION_COUNT.labels(prediction=str(prediction)).inc()
-
-    # Measure latency
     REQUEST_LATENCY.labels(endpoint="/predict").observe(time.time() - start_time)
 
     return render_template("index.html", result=prediction)
 
 @app.route("/metrics", methods=["GET"])
 def metrics():
-    """Expose only custom Prometheus metrics."""
+    """Expose custom Prometheus metrics."""
     return generate_latest(registry), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
+# --------------------- MAIN ENTRY POINT ---------------------
 if __name__ == "__main__":
-    # app.run(debug=True) # for local use
-    app.run(debug=True, host="0.0.0.0", port=5000)  # Accessible from outside Docker
+    app.run(debug=True, host="0.0.0.0", port=5000)
