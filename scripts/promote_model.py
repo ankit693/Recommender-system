@@ -1,98 +1,57 @@
 # scripts/promote_model.py
+
 import os
 import mlflow
-from mlflow import MlflowClient
-from mlflow.exceptions import MlflowException
 
-# -------------------------------------------------------------------------
-# ✅ Setup DagsHub MLflow Authentication FIRST
-# -------------------------------------------------------------------------
+# --------------------- CONFIG ---------------------
 dagshub_token = os.getenv("CAPSTONE_TEST")
 if not dagshub_token:
-    raise EnvironmentError("❌ CAPSTONE_TEST environment variable is not set.")
+    raise EnvironmentError("CAPSTONE_TEST environment variable is not set")
 
-# Set DagsHub credentials for MLflow
 os.environ["MLFLOW_TRACKING_USERNAME"] = dagshub_token
 os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
 
-# Define your DagsHub repo MLflow tracking URI
 dagshub_url = "https://dagshub.com"
 repo_owner = "ankit693"
-repo_name = "Recommender-System"
+repo_name = "Recommendation-System"
 
 mlflow.set_tracking_uri(f"{dagshub_url}/{repo_owner}/{repo_name}.mlflow")
-print("🔍 Using MLflow Tracking URI:", mlflow.get_tracking_uri())
 
+model_name = "my_model"
 
+# --------------------- PROMOTION FUNCTION ---------------------
 def promote_model():
-    """
-    Promote the latest 'staging' model to 'production' in MLflow Model Registry.
-    Uses manual stage search instead of alias API (for DagsHub compatibility).
-    """
-    client = MlflowClient()
-    model_name = "my_model"
+    client = mlflow.MlflowClient()
+    print(f"🔍 Using MLflow Tracking URI: {mlflow.get_tracking_uri()}")
 
-    # ---------------------------------------------------------------------
-    # ✅ Step 1: Get version currently tagged as 'staging'
-    # ---------------------------------------------------------------------
-    try:
-        versions = client.search_model_versions(f"name='{model_name}'")
-        staging_version = None
-        for v in versions:
-            # Check either aliases list or stage name
-            if "staging" in getattr(v, "aliases", []) or v.current_stage.lower() == "staging":
-                staging_version = v
-                break
+    # Search for all versions
+    versions = client.search_model_versions(f"name='{model_name}'")
 
-        if staging_version is None:
-            raise ValueError("No model version tagged or staged as 'staging' found.")
+    if not versions:
+        raise ValueError(f"❌ No versions found for model '{model_name}'")
 
-        staging_version_num = staging_version.version
-        print(f"✅ Found model version {staging_version_num} tagged as 'staging'.")
-    except Exception as e:
-        raise ValueError(f"❌ Failed to locate 'staging' model version for '{model_name}': {e}")
+    # Try to find staging version
+    staging_versions = [v for v in versions if v.current_stage.lower() == "staging"]
 
-    # ---------------------------------------------------------------------
-    # ✅ Step 2: Find current 'production' model (if any)
-    # ---------------------------------------------------------------------
-    current_prod_version = None
-    try:
-        versions = client.search_model_versions(f"name='{model_name}'")
-        for v in versions:
-            if "production" in getattr(v, "aliases", []) or v.current_stage.lower() == "production":
-                current_prod_version = v.version
-                print(f"ℹ️ Current 'production' model version: {current_prod_version}")
-                break
-        if current_prod_version is None:
-            print("⚠️ No current 'production' model found. This will be the first promotion.")
-    except MlflowException:
-        print("⚠️ Could not retrieve existing 'production' version.")
-    except Exception as e:
-        print(f"⚠️ Unexpected error fetching 'production': {e}")
+    if staging_versions:
+        # Pick first staging version
+        version_to_promote = int(staging_versions[0].version)
+        print(f"✅ Found staging version {version_to_promote}")
+    else:
+        # Fallback to latest version if no staging exists
+        version_to_promote = max(int(v.version) for v in versions)
+        print(f"⚠️ No staging version found. Using latest version {version_to_promote} instead.")
 
-    # ---------------------------------------------------------------------
-    # ✅ Step 3: Promote staging → production
-    # ---------------------------------------------------------------------
-    try:
-        # Update the stage (DagsHub honors this field)
-        client.transition_model_version_stage(
-            name=model_name,
-            version=staging_version_num,
-            stage="Production",
-            archive_existing_versions=False
-        )
-        print(f"🚀 Model version {staging_version_num} promoted to 'Production' stage.")
-    except Exception as e:
-        raise RuntimeError(f"❌ Failed to promote model to production: {e}")
+    # Promote to production
+    client.transition_model_version_stage(
+        name=model_name,
+        version=version_to_promote,
+        stage="Production",
+        archive_existing_versions=True  # Archive previous production versions
+    )
 
-    # ---------------------------------------------------------------------
-    # ✅ Step 4: Optional cleanup or reporting
-    # ---------------------------------------------------------------------
-    if current_prod_version and current_prod_version != staging_version_num:
-        print(f"📦 Previous production model (v{current_prod_version}) retained. Consider archiving manually.")
+    print(f"🎉 Model '{model_name}' version {version_to_promote} is now in PRODUCTION.")
 
-    print("✅ Promotion completed successfully.")
-
-
+# --------------------- MAIN ---------------------
 if __name__ == "__main__":
     promote_model()
