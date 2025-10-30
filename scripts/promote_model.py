@@ -49,7 +49,7 @@ def promote_model():
         print("⚠️ No current 'production' model found. This will be the first promotion.")
 
     # -------------------------------------------------------------------------
-    # ✅ Step 3: Move production alias to new version
+    # ✅ Step 3: Move production alias to new version .
     # -------------------------------------------------------------------------
     # Assign alias 'production' to staging version
     client.set_registered_model_alias(
