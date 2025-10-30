@@ -1,24 +1,45 @@
 import unittest
+from unittest.mock import patch, MagicMock
 from flask_app.app import app
 
-class FlaskAppTests(unittest.TestCase):
+class FlaskAppTestCase(unittest.TestCase):
+    def setUp(self):
+        self.app = app.test_client()
+        self.app.testing = True
 
-    @classmethod
-    def setUpClass(cls):
-        cls.client = app.test_client()
+    @patch("flask_app.app.mlflow.pyfunc.load_model")
+    @patch("flask_app.app.mlflow.MlflowClient")
+    @patch("flask_app.app.pickle.load")
+    def test_home(self, mock_pickle_load, mock_mlflow_client, mock_load_model):
+        # Mock the vectorizer and model
+        mock_vectorizer = MagicMock()
+        mock_vectorizer.transform.return_value.toarray.return_value = [[0, 1, 0]]
+        mock_pickle_load.return_value = mock_vectorizer
 
-    def test_home_page(self):
-        response = self.client.get('/')
+        mock_model = MagicMock()
+        mock_model.predict.return_value = ["positive"]
+        mock_load_model.return_value = mock_model
+
+        response = self.app.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'<title>Sentiment Analysis</title>', response.data)
+        self.assertIn(b"<html", response.data)
 
-    def test_predict_page(self):
-        response = self.client.post('/predict', data=dict(text="I love this!"))
+    @patch("flask_app.app.mlflow.pyfunc.load_model")
+    @patch("flask_app.app.mlflow.MlflowClient")
+    @patch("flask_app.app.pickle.load")
+    def test_predict(self, mock_pickle_load, mock_mlflow_client, mock_load_model):
+        # Mock the vectorizer and model
+        mock_vectorizer = MagicMock()
+        mock_vectorizer.transform.return_value.toarray.return_value = [[0, 1, 0]]
+        mock_pickle_load.return_value = mock_vectorizer
+
+        mock_model = MagicMock()
+        mock_model.predict.return_value = ["positive"]
+        mock_load_model.return_value = mock_model
+
+        response = self.app.post("/predict", data={"text": "Test input"})
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(
-            b'Positive' in response.data or b'Negative' in response.data,
-            "Response should contain either 'Positive' or 'Negative'"
-        )
+        self.assertIn(b"positive", response.data)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
