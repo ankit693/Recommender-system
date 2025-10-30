@@ -11,7 +11,6 @@ from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
 import string
 import re
-import dagshub
 import warnings
 import numpy as np
 
@@ -19,7 +18,7 @@ import numpy as np
 warnings.simplefilter("ignore", UserWarning)
 warnings.filterwarnings("ignore")
 
-# ✅ Text preprocessing utilities
+# --------------------- TEXT PREPROCESSING ---------------------
 def lemmatization(text):
     lemmatizer = WordNetLemmatizer()
     return " ".join([lemmatizer.lemmatize(word) for word in text.split()])
@@ -91,42 +90,38 @@ PREDICTION_COUNT = Counter(
 # --------------------- MODEL LOADING ---------------------
 model_name = "my_model"
 
-def get_model_uri_by_alias(model_name, alias="production"):
+def get_model_uri_by_stage(model_name, stage="production"):
     """
-    Get model URI using new MLflow alias system.
-    Fallback to 'staging' or 'latest' if alias not found.
+    Get MLflow model URI using stage (production/staging).
+    Fallback to latest version if stage not found.
     """
     client = mlflow.MlflowClient()
-    try:
-        versions = client.get_model_version_by_alias(model_name, alias)
-        if versions:
-            print(f"✅ Using model alias: {alias} → version {versions.version}")
-            return f"models:/{model_name}@{alias}"
-    except Exception as e:
-        print(f"⚠️ Alias '{alias}' not found: {e}")
-
-    # Fallback to 'staging' or latest version
-    try:
-        versions = client.get_model_version_by_alias(model_name, "staging")
-        if versions:
-            print(f"✅ Using fallback alias 'staging' → version {versions.version}")
-            return f"models:/{model_name}@staging"
-    except Exception as e:
-        print(f"⚠️ Alias 'staging' not found: {e}")
-
-    # Fallback to latest version (no alias)
     versions = client.search_model_versions(f"name='{model_name}'")
+    target_version = None
+
+    # Try to find the version in the requested stage
+    for v in versions:
+        if v.current_stage.lower() == stage.lower():
+            target_version = v
+            break
+
+    if target_version:
+        print(f"✅ Using model stage '{stage}' → version {target_version.version}")
+        return f"models:/{model_name}/{target_version.version}"
+
+    # Fallback to latest version
     if versions:
         latest_version = max([int(v.version) for v in versions])
-        print(f"✅ Using latest model version: {latest_version}")
+        print(f"⚠️ Stage '{stage}' not found, falling back to latest version {latest_version}")
         return f"models:/{model_name}/{latest_version}"
 
     raise ValueError(f"No available versions found for model '{model_name}'")
 
-# Get model URI (by alias)
-model_uri = get_model_uri_by_alias(model_name, alias="production")
 
+# Load model and vectorizer
+model_uri = get_model_uri_by_stage(model_name, stage="production")
 print(f"Fetching model from: {model_uri}")
+
 model = mlflow.pyfunc.load_model(model_uri)
 vectorizer = pickle.load(open("models/vectorizer.pkl", "rb"))
 
