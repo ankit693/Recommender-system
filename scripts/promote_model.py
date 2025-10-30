@@ -26,8 +26,8 @@ print("🔍 Using MLflow Tracking URI:", mlflow.get_tracking_uri())
 
 def promote_model():
     """
-    Promote the latest 'staging' model to 'production' in MLflow Model Registry
-    using model aliases (requires MLflow >= 2.9).
+    Promote the latest 'staging' model to 'production' in MLflow Model Registry.
+    Uses manual stage search instead of alias API (for DagsHub compatibility).
     """
     client = MlflowClient()
     model_name = "my_model"
@@ -36,49 +36,60 @@ def promote_model():
     # ✅ Step 1: Get version currently tagged as 'staging'
     # ---------------------------------------------------------------------
     try:
-        staging_version = client.get_model_version_by_alias(model_name, "staging")
+        versions = client.search_model_versions(f"name='{model_name}'")
+        staging_version = None
+        for v in versions:
+            # Check either aliases list or stage name
+            if "staging" in getattr(v, "aliases", []) or v.current_stage.lower() == "staging":
+                staging_version = v
+                break
+
+        if staging_version is None:
+            raise ValueError("No model version tagged or staged as 'staging' found.")
+
         staging_version_num = staging_version.version
         print(f"✅ Found model version {staging_version_num} tagged as 'staging'.")
-    except MlflowException as e:
-        raise ValueError(f"❌ No 'staging' model alias found for '{model_name}': {e}")
     except Exception as e:
-        raise ValueError(f"❌ Unexpected error while fetching staging alias: {e}")
+        raise ValueError(f"❌ Failed to locate 'staging' model version for '{model_name}': {e}")
 
     # ---------------------------------------------------------------------
-    # ✅ Step 2: Check for current 'production' model (if any)
+    # ✅ Step 2: Find current 'production' model (if any)
     # ---------------------------------------------------------------------
     current_prod_version = None
     try:
-        prod_version = client.get_model_version_by_alias(model_name, "production")
-        current_prod_version = prod_version.version
-        print(f"ℹ️ Current 'production' model version: {current_prod_version}")
+        versions = client.search_model_versions(f"name='{model_name}'")
+        for v in versions:
+            if "production" in getattr(v, "aliases", []) or v.current_stage.lower() == "production":
+                current_prod_version = v.version
+                print(f"ℹ️ Current 'production' model version: {current_prod_version}")
+                break
+        if current_prod_version is None:
+            print("⚠️ No current 'production' model found. This will be the first promotion.")
     except MlflowException:
-        print("⚠️ No current 'production' model found. This will be the first promotion.")
+        print("⚠️ Could not retrieve existing 'production' version.")
     except Exception as e:
-        print(f"⚠️ Unable to fetch 'production' alias: {e}")
+        print(f"⚠️ Unexpected error fetching 'production': {e}")
 
     # ---------------------------------------------------------------------
     # ✅ Step 3: Promote staging → production
     # ---------------------------------------------------------------------
-    client.set_registered_model_alias(
-        name=model_name,
-        alias="production",
-        version=staging_version_num
-    )
-    print(f"🚀 Model version {staging_version_num} promoted to 'production'.")
+    try:
+        # Update the stage (DagsHub honors this field)
+        client.transition_model_version_stage(
+            name=model_name,
+            version=staging_version_num,
+            stage="Production",
+            archive_existing_versions=False
+        )
+        print(f"🚀 Model version {staging_version_num} promoted to 'Production' stage.")
+    except Exception as e:
+        raise RuntimeError(f"❌ Failed to promote model to production: {e}")
 
     # ---------------------------------------------------------------------
-    # ✅ Step 4: (Optional) Cleanup old alias or logging
+    # ✅ Step 4: Optional cleanup or reporting
     # ---------------------------------------------------------------------
     if current_prod_version and current_prod_version != staging_version_num:
-        try:
-            client.delete_registered_model_alias(
-                name=model_name,
-                alias="staging"  # optional cleanup — remove old staging alias
-            )
-            print(f"📦 Old staging alias removed. Previous production version: {current_prod_version}.")
-        except Exception as e:
-            print(f"⚠️ Could not remove old staging alias: {e}")
+        print(f"📦 Previous production model (v{current_prod_version}) retained. Consider archiving manually.")
 
     print("✅ Promotion completed successfully.")
 
