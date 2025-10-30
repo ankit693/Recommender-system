@@ -2,6 +2,8 @@
 
 import os
 import mlflow
+print("🔍 Using MLflow Tracking URI:", mlflow.get_tracking_uri())
+
 
 def promote_model():
     """Promote the latest 'staging' model to 'production' using MLflow aliases (>=2.9)."""
