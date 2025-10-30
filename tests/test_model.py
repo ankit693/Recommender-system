@@ -111,7 +111,7 @@ class TestModelLoading(unittest.TestCase):
         self.assertGreaterEqual(f1_new, expected_f1, f"F1 score should be ≥ {expected_f1}")
 
 # ----------------------------------------------------------------
-# MAIN ENTRY POINT
+# MAIN ENTRY POINT for tests
 # ----------------------------------------------------------------
 if __name__ == "__main__":
     unittest.main()
